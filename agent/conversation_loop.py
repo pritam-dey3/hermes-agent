@@ -876,6 +876,18 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
     except Exception:
         logger.debug("cold-start credits seed failed (fail-open)", exc_info=True)
 
+    # A history-less single-turn run (cron: run_conversation(prompt) with no
+    # conversation_history) reaches this first-turn path while the session row is still
+    # absent — turn_context creates it only AFTER restore_or_build_system_prompt returns.
+    # The pin write below is an UPDATE, so without a row it silently affects 0 rows and
+    # sessions.tool_names stays NULL (the create upsert does not carry tool_names). Create
+    # the row now (idempotent; the later _ensure_session_row is a no-op) so the pin lands.
+    if agent._session_db and not getattr(agent, "_session_db_created", False):
+        try:
+            agent._ensure_db_session()
+        except Exception:
+            logger.debug("session row pre-creation before tool pin skipped", exc_info=True)
+
     _persist_system_prompt(
         agent,
         "Session DB update_system_prompt failed for session %s: %s. Subsequent turns will "
